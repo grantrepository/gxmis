@@ -1,2 +1,2 @@
-# gxmis-plugin
-plugin on eosio for GUOXINTAIYI organization
+# gxmis
+extend on eosio for GUOXINTAIYI organization
