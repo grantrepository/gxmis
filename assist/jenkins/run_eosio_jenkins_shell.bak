@@ -1,0 +1,47 @@
+set -x
+cd $WORKSPACE
+
+if [[ ! -d ${EOSIO_REPO_ROOT_DIR##*/} ]];then
+mkdir -p nodeos_data/data nodeos_data/config nodeos_data/log nodeos_data/wallet ${EOSIO_REPO_ROOT_DIR##*/}
+cp -R $EOSIO_REPO_ROOT_DIR/. ${EOSIO_REPO_ROOT_DIR##*/}
+
+fi
+
+if [[ "true" == $UPDATE_EOSIO_REPO ]]; then
+	rm -rf ${EOSIO_REPO_ROOT_DIR##*/}
+    mkdir ${EOSIO_REPO_ROOT_DIR##*/}
+	cp -R $EOSIO_REPO_ROOT_DIR/. ${EOSIO_REPO_ROOT_DIR##*/}
+fi
+
+if [[ ! -d $(dirname $WORKSPACE)/eosio/conf ]]; then
+	mkdir -p $(dirname $WORKSPACE)/eosio/conf $(dirname $WORKSPACE)/eosio/bin
+fi
+
+rm -rf ${EOSIO_REPO_ROOT_DIR##*/}/assist
+mv assist ${EOSIO_REPO_ROOT_DIR##*/}
+
+rm -rf ${EOSIO_REPO_ROOT_DIR##*/}/plugins/data_exchange_*
+mv plugins/data_exchange_* ${EOSIO_REPO_ROOT_DIR##*/}/plugins/
+
+mv config.ini_1.8.x nodeos_data/config/config.ini
+echo -e "$ENO_multi_options" >> nodeos_data/config/config.ini
+echo "wallet-url = unix://$(dirname $JENKINS_HOME)/eosio-wallet/keosd.sock" >> nodeos_data/config/config.ini
+
+cd ${EOSIO_REPO_ROOT_DIR##*/}
+git checkout $EOSIO_REPO_BRANCH
+
+./assist/add_plugin_to_build.sh
+
+echo "$CORE_SYMBOL_NAME" > $(dirname $WORKSPACE)/eosio/conf/core_symbol_name
+echo "$PUB_PREFIX" > $(dirname $WORKSPACE)/eosio/conf/pubkey_prefix
+echo "$RPC_SERVER_ADDRESS" > $(dirname $WORKSPACE)/eosio/conf/http_server_address
+
+if [[ "MIS" == "$PUB_PREFIX" ]]; then
+	./assist/modify_eosio_for_mis.sh
+fi
+
+./scripts/eosio_build.sh -y -s $CORE_SYMBOL_NAME -i $(dirname $WORKSPACE)/eosio
+./scripts/eosio_install.sh
+
+./assist/jenkins/run_eosio.sh
+
