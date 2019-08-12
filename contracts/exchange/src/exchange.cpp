@@ -28,7 +28,7 @@ ACTION mis_exchange::approvedata( name requester, name provider, const string& d
 }   
 
 ACTION mis_exchange::uploaddata( name uploader, const string& data, const string& datatype,const string& time ) { 
-    require_auth( uploader );
+//    require_auth( uploader );
 }   
 
 void mis_exchange::surprise_wlt( name account, const string& wltpwd) {

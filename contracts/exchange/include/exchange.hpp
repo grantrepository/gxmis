@@ -84,7 +84,6 @@ struct [[eosio::table, eosio::contract("exchange")]] matched_order {
     uint64_t by_buyer() const { return buyer.value; }
     uint64_t by_seller() const { return seller.value; }
     uint64_t by_matched_time() const { return matched_time; }
-
     EOSLIB_SERIALIZE( matched_order, (id)(buyer_oid)(seller_oid)(buyer)(seller)(commodity_type)(commodity)(amount)(matched_time)(price) )
 };
 
@@ -179,10 +178,13 @@ class [[eosio::contract("exchange")]] mis_exchange : public contract {
 
         mis_exchange( name s, name code, datastream<const char*> ds );
 
+        // 手动购买数据记录
         ACTION buydata( name buyer, name seller, const string& orderid, const string& ordertime, const string& paytime, const string& payamount); 
 
+        // 面对面数据验证记录
         ACTION approvedata( name requester, name provider, const string& data, const string& time, bool approved );
 
+        // 数据上传记录
         ACTION uploaddata( name uploader, const string& data, const string& datatype,const string& time );
 	  
         // 委托单
