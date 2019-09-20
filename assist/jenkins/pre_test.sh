@@ -35,9 +35,7 @@ function active_PREACTIVATE_FEATURE_for_nodeos-v1.8.0_or_later()
     nodeosv=$($nodeos --version || true)
     [[ "$nodeosv" > "v1.8" || "$nodeosv" > "1.8" ]] && activated_protocol_features=$(curl -X POST $http_server_address/v1/chain/get_activated_protocol_features) || true
 
-    echo $activated_protocol_features | grep -qw $PREACTIVATE_FEATURE_NAME
-
-    if [[ 0 -lt $? ]]; then
+    echo $activated_protocol_features | grep -qw $PREACTIVATE_FEATURE_NAME || (
         supported_protocol_features=$(curl -X POST $http_server_address/v1/producer/get_supported_protocol_features)
 
         truncated_tail=${supported_protocol_features%%${PREACTIVATE_FEATURE_NAME}*}
@@ -45,7 +43,7 @@ function active_PREACTIVATE_FEATURE_for_nodeos-v1.8.0_or_later()
         preactivate_feature_digest=${truncated_head%%\",\"*}
 
         curl -X POST $http_server_address/v1/producer/schedule_protocol_feature_activations -d '{"protocol_features_to_activate": ['"$preactivate_feature_digest"']}'
-    fi
+    )
     set +x
 
     return 0
