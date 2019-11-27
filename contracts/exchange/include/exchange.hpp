@@ -21,6 +21,23 @@ struct account {
 typedef eosio::multi_index<name("accounts"), account> accounts;
 
 // 这里写明合约名，表示需要在合约的abi文件中编译生成表的结构声明
+struct [[eosio::table,eosio::contract("exchange")]] complete_order{
+    uint64_t id;            // 主键
+    name buyer;             // 购买者账号
+    name seller;            // 售卖者账号
+    string orderid;         // 订单号
+    string ordertime;       // 下单时间
+    string paytime;         // 支付时间
+    string payamount;       // 支付金额
+    bool state;             // 订单状态
+
+    auto primary_key() const { return id; }
+    uint64_t by_buyer() const { return buyer.value; }
+    uint64_t by_seller() const { return seller.value; }
+
+    EOSLIB_SERIALIZE( complete_order, (id)(buyer)(seller)(orderid)(ordertime)(paytime)(payamount)(state) )
+}
+
 struct [[eosio::table,eosio::contract("exchange")]] matched_price{
     uint64_t id;            // 主键
     string commodity_name;  // 商品名
@@ -96,6 +113,38 @@ struct [[eosio::table, eosio::contract("exchange")]] wallet_password {
     EOSLIB_SERIALIZE( wallet_password, (account)(wltpwd) )
 };
 
+struct [[eosio::table, eosio::contract("exchange")]] sgx_model_result{
+    uint64_t id;            // 主键
+    string content;         // SGX模型计算结果内容
+    string form;            // 内容存储形式，大数据、多记录；值：bunch或record
+    string type;            // 计算结果类型，标签、指标等；值：label或quota
+    string access_method;   // 获取content的方式，通过url下载、直接显示文本；值：url或text
+    string company;         // 提供content的公司名称
+    uint64_t encrypted;      // content是否加密；值：0，未加密；1，已加密
+
+    auto primary_key() const { return id; }
+    checksum256 by_form() const { return string_to_sha256(form); }
+    checksum256 by_type() const { return string_to_sha256(type); }
+    checksum256 by_access_method() const { return string_to_sha256(access_method); }
+    checksum256 by_company() const { return string_to_sha256(company); }
+    uint64_t by_encrypted() const { return encrypted; }
+
+    EOSLIB_SERIALIZE( sgx_model_result, (id)(content)(form)(type)(access_method)(company)(encrypted) )
+};
+
+typedef eosio::multi_index<"sgxresult"_n, sgx_model_result,
+            indexed_by< "byform"_n, const_mem_fun<sgx_model_result, checksum256, &sgx_model_result::by_form> >,
+            indexed_by< "bytype"_n, const_mem_fun<sgx_model_result, checksum256, &sgx_model_result::by_type> >,
+            indexed_by< "byaccmeth"_n, const_mem_fun<sgx_model_result, checksum256, &sgx_model_result::by_access_method> >,
+            indexed_by< "bycompany"_n, const_mem_fun<sgx_model_result, checksum256, &sgx_model_result::by_company> >,
+            indexed_by< "byencrypted"_n, const_mem_fun<sgx_model_result, uint64_t, &sgx_model_result::by_encrypted> >
+            > sgx_model_result_table;
+
+typedef eosio::multi_index< "complorder"_n, complete_order,
+            indexed_by< "bybuyer"_n, const_mem_fun<complete_order, uint64_t, &complete_order::by_buyer> >,
+            indexed_by< "byseller"_n, const_mem_fun<complete_order, uint64_t, &complete_order::by_seller> >
+            > complete_order_table;
+
 typedef eosio::multi_index< "wltpwd"_n, wallet_password > wallet_password_table;
 
 typedef eosio::multi_index< "matchedprice"_n, matched_price,
@@ -158,6 +207,7 @@ class [[eosio::contract("exchange")]] mis_exchange : public contract {
     typedef singleton<"defersingle"_n, uint64_t> sendid;
 
     private:
+        complete_order_table    _complete_order;
         commodity_type_table    _commodity_type;
         buyer_table             _buyer;
         buyer_order_table       _buyer_order;
@@ -168,6 +218,7 @@ class [[eosio::contract("exchange")]] mis_exchange : public contract {
         sendid                  _sid;
         wallet_password_table   _wltpwd;
         cancel_order_table      _cancel_order;
+        sgx_model_result_table  _sgx_model_result;
 
     private:
         static constexpr name tb_scope{"dataex"_n};
@@ -179,7 +230,7 @@ class [[eosio::contract("exchange")]] mis_exchange : public contract {
         mis_exchange( name s, name code, datastream<const char*> ds );
 
         // 手动购买数据记录
-        ACTION buydata( name buyer, name seller, const string& orderid, const string& ordertime, const string& paytime, const string& payamount); 
+        ACTION buydata( name buyer, name seller, const string& orderid, const string& ordertime, const string& paytime, const string& payamount, bool state); 
 
         // 面对面数据验证记录
         ACTION approvedata( name requester, name provider, const string& data, const string& time, bool approved );
@@ -203,6 +254,10 @@ class [[eosio::contract("exchange")]] mis_exchange : public contract {
 	    [[eosio::action("mlmto")]]
         void match_limit_order( const checksum256& buyer_oid, const checksum256& seller_oid, const string& commodity);
 
+// 链外应用提交SGX模型计算结果到区块 
+	    [[eosio::action("deliversmr")]]
+        void deliver_sgx_model_result(const string& content, const string& form, const string& type, const string& access_method, const string& company, uint64_t encrypted);
+        
         using buydata_action = action_wrapper<"buydata"_n, &mis_exchange::buydata>;
         using approvedata_action = action_wrapper<"approvedata"_n, &mis_exchange::approvedata>;
         using uploaddata_action = action_wrapper<"uploaddata"_n, &mis_exchange::uploaddata>;

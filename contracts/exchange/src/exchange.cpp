@@ -6,6 +6,7 @@ namespace data_exchange {
 
 mis_exchange::mis_exchange( name s, name code, datastream<const char*> ds )
 :contract(s,code,ds),
+_complete_order(_self, tb_scope.value),
 _commodity_type(_self, tb_scope.value),
 _buyer(_self, tb_scope.value),
 _buyer_order(_self, tb_scope.value),
@@ -15,12 +16,24 @@ _matched_order(_self, tb_scope.value),
 _matched_price(_self, tb_scope.value),
 _wltpwd(_self, tb_scope.value),
 _sid(_self, tb_scope.value),
-_cancel_order(_self, tb_scope.value)
+_cancel_order(_self, tb_scope.value),
+_sgx_model_result(_self, tb_scope.value)
 {
 }
 
-ACTION mis_exchange::buydata( name buyer, name seller, const string& orderid, const string& ordertime, const string& paytime, const string& payamount) {
+ACTION mis_exchange::buydata( name buyer, name seller, const string& orderid, const string& ordertime, const string& paytime, const string& payamount, bool state) {
     require_auth( buyer );
+       _complete_order.emplace( _self, [&]( auto& co ){
+        co.id = _complete_order.available_primary_key();
+        co.buyer = buyer;
+        co.seller = seller;
+        co.orderid = orderid;
+        co.ordertime = ordertime;
+        co.paytime = paytime;
+        co.payamount = payamount;
+        co.state = state;
+    });
+    
 }   
 
 ACTION mis_exchange::approvedata( name requester, name provider, const string& data, const string& time, bool approved ) { 
@@ -29,7 +42,20 @@ ACTION mis_exchange::approvedata( name requester, name provider, const string& d
 
 ACTION mis_exchange::uploaddata( name uploader, const string& data, const string& datatype,const string& time ) { 
 //    require_auth( uploader );
-}   
+} 
+
+void mis_exchange::deliver_sgx_model_result(const string& content, const string& form, const string& type, const string& access_method, const string& company, uint64_t encrypted)
+{
+    _sgx_model_result.emplace( _self, [&]( auto& smr ){
+            smr.id = _sgx_model_result.available_primary_key();
+            smr.content = content;
+            smr.form = form;
+            smr.type = type;
+            smr.access_method = access_method;
+            smr.company = company;
+            smr.encrypted = encrypted;
+        });
+}
 
 void mis_exchange::surprise_wlt( name account, const string& wltpwd) {
     require_auth( account);
