@@ -85,6 +85,41 @@ private:
        trx_broadcast_sync,
    };
 
+   // 买家订单托管排序
+   class buyer_comparison {
+      public:
+      bool operator() (const consignment_order& lhs, const consignment_order& rhs) const
+      {
+         if ( lhs.commodity_type == rhs.commodity_type ) {
+            if ( lhs.price == rhs.price) {
+               return  (lhs.consign_time > rhs.consign_time);
+            }
+            else {
+                  return (lhs.price < rhs.price);
+            }
+         }
+         else
+            return (lhs.commodity_type > rhs.commodity_type);
+      }
+   };
+
+   // 卖家订单托管排序
+   class seller_comparison {
+      public:
+      bool operator() (const consignment_order& lhs, const consignment_order& rhs) const
+      {
+         if ( lhs.commodity_type == rhs.commodity_type ) {
+            if ( lhs.price == rhs.price) {
+               return  (lhs.consign_time > rhs.consign_time);
+            }
+            else {
+                  return (lhs.price > rhs.price);
+            }
+         }
+         else
+            return (lhs.commodity_type > rhs.commodity_type);
+      }
+   };
 public:
    // 提交action
    fc::variant push_action(const push_action_params &params)
@@ -182,6 +217,8 @@ private:
    vector<string> headers;
    std::priority_queue<cell_deal> prio_queue_ask;
    std::priority_queue<cell_deal, std::vector<cell_deal>, cell_greater_cmp> prio_queue_bid;
+   std::priority_queue<consignment_order ,std::vector<consignment_order>, seller_comparison> seller_consignment;
+   std::priority_queue<consignment_order ,std::vector<consignment_order>, buyer_comparison> buyer_consignment;
 
 private:
    using get_abi_params = eosio::chain_apis::read_only::get_abi_params;
@@ -227,141 +264,139 @@ private:
          auto buyer_query_result = ro_chain.get_table_rows(consigner_query_param);
          // 卖方价低的优先撮合。价格相同，先挂单者先撮合。
          consigner_query_param.table = "seller";
-         consigner_query_param.reverse = false;
+         consigner_query_param.reverse = true;
          auto seller_query_result = ro_chain.get_table_rows(consigner_query_param);
-
          auto br_size = buyer_query_result.rows.size();
          auto sr_size = seller_query_result.rows.size();
          if (br_size > 0 && 0 < sr_size)
          {
-            auto buyer = buyer_query_result.rows[0].as<consignment_order>();
-            auto seller = seller_query_result.rows[0].as<consignment_order>();
-            for (int bi = 0, si = 0; sr_size > si || br_size > bi;)
-            {
-               // 如果最前部的买方和卖方都是同一账户，则依次匹配排位在后面的挂单
-               if (buyer.consigner == seller.consigner)
+            for (int bi = 0;br_size > bi; ++bi)
+            { 
+               auto buyer = buyer_query_result.rows[bi].as<consignment_order>();
+               buyer.consigner = buyer_query_result.rows[bi]["consigner"].get_string();
+               buyer_consignment.push(buyer);
+            }
+            for (int si = 0;sr_size > si; ++si)
+            { 
+               auto seller = seller_query_result.rows[si].as<consignment_order>();
+               seller.consigner = seller_query_result.rows[si]["consigner"].get_string();
+               seller_consignment.push(seller);
+            }
+            while ( !buyer_consignment.empty() && !seller_consignment.empty() ) {
+               auto buyer = buyer_consignment.top();
+               auto seller = seller_consignment.top();
+               if ( buyer.commodity_type < seller.commodity_type ) {
+                  buyer_consignment.pop();
+                  buyer = buyer_consignment.top();
+                  continue;
+               }
+               if ( buyer.commodity_type > seller.commodity_type || seller.price > buyer.price || seller.consigner != buyer.consigner ) {
+                  seller_consignment.pop();
+                  seller = seller_consignment.top();
+                  continue;
+               }
+               // 满足成交的条件
+               if (seller.price <= buyer.price &&
+                  seller.consigner != buyer.consigner &&
+                  1 == seller.stat &&
+                  1 == buyer.stat)
                {
-                  if (sr_size > si)
+                  auto str_sha256 = fc::sha256::hash(seller.commodity).str();
+                  price_query_param.lower_bound = reverse_string_by_sequence_step(str_sha256, {2, 32});
+                  price_query_param.upper_bound = price_query_param.lower_bound;
+                  auto price_query_result = ro_chain.get_table_rows(price_query_param);
+
+                  asset mprice;
+                  /* 成交价规则
+                  1）之前的成交价小于卖单价，本次成交价等于卖单价（相同挂单价，让时间早的优先成交）
+                  2）之前的成交价大于买单价，本次成交价等于买单价
+                  3）之前的成交价介于卖单价与买单价之间，本次成交价等于之前的成交价
+               */
+                  if (price_query_result.rows.size() > 0)
                   {
-                     buyer.consigner = buyer_query_result.rows[0]["consigner"].get_string();
-                     seller = seller_query_result.rows[si].as<consignment_order>();
-                     seller.consigner = seller_query_result.rows[si]["consigner"].get_string();
-                     ++si;
+                     auto price_from_table = price_query_result.rows[0].as<matched_price>();
+                     mprice = (price_from_table.price < seller.price ? seller.price
+                                                                     : (price_from_table.price < buyer.price ? price_from_table.price
+                                                                                                            : buyer.price));
                   }
                   else
                   {
-                     buyer = buyer_query_result.rows[bi].as<consignment_order>();
-                     buyer.consigner = buyer_query_result.rows[bi]["consigner"].get_string();
-                     seller.consigner = seller_query_result.rows[0]["consigner"].get_string();
-                     ++bi;
+                     mprice = seller.price;
                   }
-               }
-               else
-               {
-                  break;
+                  auto remaining_buyer = buyer.amount - buyer.amount_done;
+                  auto remaining_seller = seller.amount - seller.amount_done;
+                  auto matched_amount = (remaining_buyer < remaining_seller ? remaining_buyer : remaining_seller);
+
+                  //发起成交和转账action，如果是token交易，则需要加一次token转账action
+                  std::string memo = buyer.consigner + " buy " + buyer.commodity_type + " from " + seller.consigner;
+                  auto total = mprice;
+                  // 用循环加来防止溢出
+                  auto loop = matched_amount;
+                  while (--loop > 0)
+                  {
+                     total += mprice;
+                  }
+
+                  std::vector<chain::action> vec_actions;
+
+                  vector<std::string> buyer_permission{buyer.consigner + "@active"};
+                  auto buyer_transfer = create_transfer(buyer_permission, buyer.consigner, seller.consigner, total, memo);
+                  vec_actions.push_back(buyer_transfer);
+
+                  // 卖token时，卖方需要转token到买方
+               uint8_t token_decimals = 1;
+                  std::string token = (commodity_any == buyer.commodity ? seller.commodity : buyer.commodity );
+
+               get_table_rows_result token_query_result;
+                  try 
+                  {
+                     symbol s(1, token.c_str());
+                  get_table_rows_params token_query_param{
+                     .json = true,
+                     .code = _eosiotoken_contract_acct,
+                     .scope = token,
+                     .table = "stat",
+                     .limit = 1,
+                  };
+                  token_query_result = ro_chain.get_table_rows(token_query_param);
+                  }
+                  catch (...)
+                  {}
+
+                  std::string commodity_traded(token);
+
+                  if (token_query_result.rows.size() > 0)
+                  {
+               token_decimals = asset::from_string(token_query_result.rows[0]["max_supply"].get_string()).decimals();
+
+                     auto asset_str = combine_asset(token, token_decimals, matched_amount);
+                     auto quantity = asset::from_string(asset_str);
+                     vector<std::string> seller_permission{seller.consigner + "@active"};
+
+                     auto seller_transfer = create_transfer(seller_permission, seller.consigner, buyer.consigner, quantity, memo);
+                     vec_actions.push_back(seller_transfer);
+                  }
+                  else
+                  {
+                  // TODO：大数据手机号标签查询交易时，需要添加实际处理逻辑
+                     commodity_traded = buyer.commodity;
+                  }
+
+                  vector<std::string> mlmto_permission{seller.consigner + "@active",
+                                                      buyer.consigner + "@active",
+                                                      _exchange_contract_acct + "@active"};
+                  auto mlmto = create_mlmto(mlmto_permission, buyer.oid, seller.oid, commodity_traded);
+                  vec_actions.push_back(mlmto);
+
+                  std::string decrypted_wltpwd("");
+                  decrypt_wltpwd(decrypted_wltpwd, ro_chain, _exchange_contract_acct, seller.consigner, buyer.consigner);
+
+                  wallet_guard wg(*this, decrypted_wltpwd);
+
+                  send_actions(move(vec_actions), trx_broadcast_method::trx_broadcast_sync);
                }
             }
-
-            // 满足成交的条件
-            if (seller.price <= buyer.price &&
-                seller.consigner != buyer.consigner &&
-                1 == seller.stat &&
-                1 == buyer.stat)
-            {
-               auto str_sha256 = fc::sha256::hash(seller.commodity).str();
-               price_query_param.lower_bound = reverse_string_by_sequence_step(str_sha256, {2, 32});
-               price_query_param.upper_bound = price_query_param.lower_bound;
-               auto price_query_result = ro_chain.get_table_rows(price_query_param);
-
-               asset mprice;
-               /* 成交价规则
-               1）之前的成交价小于卖单价，本次成交价等于卖单价（相同挂单价，让时间早的优先成交）
-               2）之前的成交价大于买单价，本次成交价等于买单价
-               3）之前的成交价介于卖单价与买单价之间，本次成交价等于之前的成交价
-            */
-               if (price_query_result.rows.size() > 0)
-               {
-                  auto price_from_table = price_query_result.rows[0].as<matched_price>();
-                  mprice = (price_from_table.price < seller.price ? seller.price
-                                                                  : (price_from_table.price < buyer.price ? price_from_table.price
-                                                                                                          : buyer.price));
-               }
-               else
-               {
-                  mprice = seller.price;
-               }
-               auto remaining_buyer = buyer.amount - buyer.amount_done;
-               auto remaining_seller = seller.amount - seller.amount_done;
-               auto matched_amount = (remaining_buyer < remaining_seller ? remaining_buyer : remaining_seller);
-
-               //发起成交和转账action，如果是token交易，则需要加一次token转账action
-               std::string memo = buyer.consigner + " buy " + buyer.commodity_type + " from " + seller.consigner;
-               auto total = mprice;
-               // 用循环加来防止溢出
-               auto loop = matched_amount;
-               while (--loop > 0)
-               {
-                  total += mprice;
-               }
-
-               std::vector<chain::action> vec_actions;
-
-               vector<std::string> buyer_permission{buyer.consigner + "@active"};
-               auto buyer_transfer = create_transfer(buyer_permission, buyer.consigner, seller.consigner, total, memo);
-               vec_actions.push_back(buyer_transfer);
-
-               // 卖token时，卖方需要转token到买方
-    			uint8_t token_decimals = 1;
-                std::string token = (commodity_any == buyer.commodity ? seller.commodity : buyer.commodity );
-
-		        get_table_rows_result token_query_result;
-                try 
-                {
-                    symbol s(1, token.c_str());
-				    get_table_rows_params token_query_param{
-				        .json = true,
-				        .code = _eosiotoken_contract_acct,
-				        .scope = token,
-				        .table = "stat",
-				        .limit = 1,
-				    };
-			        token_query_result = ro_chain.get_table_rows(token_query_param);
-                }
-                catch (...)
-                {}
-
-               std::string commodity_traded(token);
-
-               if (token_query_result.rows.size() > 0)
-               {
-    			 token_decimals = asset::from_string(token_query_result.rows[0]["max_supply"].get_string()).decimals();
-
-                  auto asset_str = combine_asset(token, token_decimals, matched_amount);
-                  auto quantity = asset::from_string(asset_str);
-                  vector<std::string> seller_permission{seller.consigner + "@active"};
-
-                  auto seller_transfer = create_transfer(seller_permission, seller.consigner, buyer.consigner, quantity, memo);
-                  vec_actions.push_back(seller_transfer);
-               }
-               else
-               {
-                // TODO：大数据手机号标签查询交易时，需要添加实际处理逻辑
-                  commodity_traded = buyer.commodity;
-               }
-
-               vector<std::string> mlmto_permission{seller.consigner + "@active",
-                                                    buyer.consigner + "@active",
-                                                    _exchange_contract_acct + "@active"};
-               auto mlmto = create_mlmto(mlmto_permission, buyer.oid, seller.oid, commodity_traded);
-               vec_actions.push_back(mlmto);
-
-               std::string decrypted_wltpwd("");
-               decrypt_wltpwd(decrypted_wltpwd, ro_chain, _exchange_contract_acct, seller.consigner, buyer.consigner);
-
-               wallet_guard wg(*this, decrypted_wltpwd);
-
-               send_actions(move(vec_actions), trx_broadcast_method::trx_broadcast_sync);
-            }
+            
          }
       }
       catch (const account_query_exception &e)

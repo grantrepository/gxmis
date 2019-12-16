@@ -36,7 +36,7 @@ struct [[eosio::table,eosio::contract("exchange")]] complete_order{
     uint64_t by_seller() const { return seller.value; }
 
     EOSLIB_SERIALIZE( complete_order, (id)(buyer)(seller)(orderid)(ordertime)(paytime)(payamount)(state) )
-}
+};
 
 struct [[eosio::table,eosio::contract("exchange")]] matched_price{
     uint64_t id;            // 主键

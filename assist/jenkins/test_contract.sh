@@ -186,13 +186,34 @@ function show_blockchain_info()
     return 0
 }
 
+function test_match_order()
+{
+    try_unlock_wallet $WALLET_NAME
+    testcount=6
+    while [[ testcount-- -ne 0 ]];
+    do
+        t_buy_quantity=$(($RANDOM % 45 + 1))
+        t_sell_quantity=$(($RANDOM % 34 + 1))
+        t_buy_price="$(($RANDOM % 76 + 1))"".5623 RMB"
+        t_sell_price="$(($RANDOM % 56 + 1))"".2178 RMB"
+        $cleos push action $contract_user lmto '["'"${test_accounts[1]}"'","token","'"$core_symbole_name"'",'"$t_sell_quantity"',"'"$t_sell_price"'",0]' -p ${test_accounts[1]}
+        $cleos push action $contract_user lmto '["'"${test_accounts[2]}"'","token","'"$core_symbole_name"'",'"$t_buy_quantity"',"'"$t_buy_price"'",1]' -p ${test_accounts[2]}
+        $cleos get table $contract_user $table_scope buyerorder $cleos_option
+        $cleos get table $contract_user $table_scope sellerorder $cleos_option
+    done
+    $cleos get table $contract_user $table_scope buyer $cleos_option
+    $cleos get table $contract_user $table_scope seller $cleos_option
+    return 0
+}
+
 set -x
 set_contract_to_account
 add_wltpwd_into_chain
 #swlt_action_test
-clmto_action_test
-lmto_action_test
+#lmto_action_test
+#clmto_action_test
 #mlmto_action_test
+test_match_order
 set +x
 #query_table_by_sha256_index_test
 # get the lastest block num for query transactions by trx_id
